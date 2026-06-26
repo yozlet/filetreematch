@@ -1,0 +1,16 @@
+# Copy to ~/.config/filetreematch/ignore.toml to customize defaults.
+# Hidden files that look like real data (.bashrc, .config/, etc.) are NOT ignored.
+
+ignore_names = [
+  ".DS_Store", "Thumbs.db", "desktop.ini",
+  ".Spotlight-V100", ".Trashes", ".fseventsd",
+  ".TemporaryItems", ".DocumentRevisions-V100",
+]
+
+ignore_globs = [
+  "**/.git/**",
+  "**/.svn/**",
+  "**/node_modules/**",
+  "**/__MACOSX/**",
+  "**/.cache/**",
+]
