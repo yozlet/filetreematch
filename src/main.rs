@@ -5,7 +5,7 @@ use filetreematch::cli::{Cli, Commands};
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
-        Commands::Scan(args) => filetreematch::cli::scan::run(args),
+        Commands::Scan(args) => filetreematch::cli::scan::run(args, cli.db),
         Commands::Analyze(args) => filetreematch::cli::analyze::run(args),
         Commands::List(args) => filetreematch::cli::list::run(args),
         Commands::Export(args) => filetreematch::cli::export::run(args),

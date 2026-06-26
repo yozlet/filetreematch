@@ -1,5 +1,7 @@
 pub mod directories;
+pub mod files;
 pub mod manifests;
+pub mod scans;
 
 use anyhow::{Context, Result};
 use rusqlite::Connection;
@@ -40,4 +42,6 @@ impl Database {
 }
 
 pub use directories::*;
+pub use files::*;
 pub use manifests::*;
+pub use scans::*;
