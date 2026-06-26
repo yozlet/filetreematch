@@ -1,3 +1,4 @@
+pub mod annotations;
 pub mod directories;
 pub mod files;
 pub mod manifests;
@@ -80,6 +81,7 @@ pub fn open_db(db_arg: Option<&Path>) -> Result<Database> {
     }
 }
 
+pub use annotations::*;
 pub use directories::*;
 pub use files::*;
 pub use manifests::*;
