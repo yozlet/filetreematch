@@ -1,5 +1,5 @@
 use crate::db::annotations::{get_annotation, set_annotation};
-use crate::db::query::{list_pairs, SubsetPairRow};
+use crate::db::query::{is_exact_duplicate, list_pairs, SubsetPairRow};
 use crate::db::Database;
 use anyhow::Result;
 
@@ -189,6 +189,22 @@ impl App {
         };
         let dir_id = subset_dir_id(self.db.conn(), &pair.subset_path)?;
         get_annotation(self.db.conn(), dir_id)
+    }
+
+    pub fn is_selected_exact_duplicate(&self) -> bool {
+        let Some(pair) = self.selected_pair() else {
+            return false;
+        };
+
+        match (
+            subset_dir_id(self.db.conn(), &pair.subset_path),
+            subset_dir_id(self.db.conn(), &pair.superset_path),
+        ) {
+            (Ok(subset_id), Ok(superset_id)) => {
+                is_exact_duplicate(self.db.conn(), subset_id, superset_id).unwrap_or(false)
+            }
+            _ => false,
+        }
     }
 
     pub fn subset_annotation_marker(&self, subset_path: &str) -> String {

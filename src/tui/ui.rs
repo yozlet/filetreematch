@@ -102,12 +102,24 @@ fn render_detail(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                 pair.file_count,
                 format_size(pair.total_size)
             )),
+        ];
+
+        if app.is_selected_exact_duplicate() {
+            lines.push(Line::from(vec![Span::styled(
+                "[exact duplicate]",
+                Style::default()
+                    .fg(Color::Magenta)
+                    .add_modifier(Modifier::BOLD),
+            )]));
+        }
+
+        lines.extend([
             Line::from(""),
             Line::from(vec![
                 Span::styled("Status: ", Style::default().add_modifier(Modifier::BOLD)),
                 Span::raw(status.clone()),
             ]),
-        ];
+        ]);
 
         if !notes.is_empty() {
             lines.push(Line::from(vec![

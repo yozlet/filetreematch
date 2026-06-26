@@ -59,3 +59,19 @@ pub fn list_pairs(
 
     rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
 }
+
+pub fn is_exact_duplicate(
+    conn: &Connection,
+    subset_dir_id: i64,
+    superset_dir_id: i64,
+) -> Result<bool> {
+    let exists: bool = conn.query_row(
+        "SELECT EXISTS(
+            SELECT 1 FROM subset_pairs
+            WHERE subset_dir_id = ?1 AND superset_dir_id = ?2
+        )",
+        [superset_dir_id, subset_dir_id],
+        |row| row.get(0),
+    )?;
+    Ok(exists)
+}
