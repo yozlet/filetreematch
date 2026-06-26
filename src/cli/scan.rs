@@ -1,4 +1,5 @@
 use super::ScanArgs;
+use crate::analyze::run_analyze;
 use crate::config::ignore::load_ignore_rules;
 use crate::db::{finish_scan, start_scan, Database};
 use crate::scan::run_scan;
@@ -22,7 +23,7 @@ pub fn run(args: ScanArgs, db: Option<PathBuf>) -> Result<()> {
     run_scan(&args.root, &database, &ignore, scan_id)?;
     finish_scan(database.conn(), scan_id)?;
     if args.analyze {
-        // Task 9: wire analyze after scan
+        run_analyze(&database, false)?;
     }
     Ok(())
 }
