@@ -1,5 +1,5 @@
 use crate::config::ignore::IgnoreRules;
-use crate::db::directories::upsert_directory;
+use crate::db::directories::{get_directory_id, get_fingerprint, upsert_directory};
 use crate::db::files::insert_file;
 use crate::db::manifests::{insert_manifest_entry, rollup_manifest};
 use crate::db::scans::log_scan_error;
@@ -37,6 +37,14 @@ fn scan_directory(
         .unwrap_or("");
     let full_path = path.to_string_lossy().to_string();
     let conn = db.conn();
+
+    if let Some(existing_id) = get_directory_id(conn, &full_path)? {
+        let disk_fp = compute_fingerprint_from_disk(path, db, ignore)?;
+        let disk_hash = hash_fingerprint(&disk_fp);
+        if get_fingerprint(conn, existing_id)?.as_deref() == Some(disk_hash.as_str()) {
+            return Ok(existing_id);
+        }
+    }
 
     let entries = match fs::read_dir(path) {
         Ok(entries) => entries,
@@ -140,6 +148,59 @@ fn scan_directory(
     rollup_manifest(conn, dir_id, &child_ids)?;
 
     Ok(dir_id)
+}
+
+fn compute_fingerprint_from_disk(
+    path: &Path,
+    db: &Database,
+    ignore: &IgnoreRules,
+) -> Result<ScanFingerprint> {
+    let conn = db.conn();
+    let entries = match fs::read_dir(path) {
+        Ok(entries) => entries,
+        Err(_) => return Ok(ScanFingerprint::empty()),
+    };
+
+    let mut local_count = 0u64;
+    let mut local_size = 0u64;
+    let mut local_mtime = 0i64;
+    let mut child_fps = Vec::new();
+
+    for entry in entries {
+        let entry = match entry {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        let entry_path = entry.path();
+        if ignore.should_ignore(&entry_path) {
+            continue;
+        }
+
+        let meta = match entry.metadata() {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+
+        if meta.is_dir() {
+            let child_path = entry_path.to_string_lossy().to_string();
+            if let Some(child_id) = get_directory_id(conn, &child_path)? {
+                child_fps.push(load_fingerprint(conn, child_id)?);
+            } else {
+                child_fps.push(compute_fingerprint_from_disk(&entry_path, db, ignore)?);
+            }
+        } else if meta.is_file() || meta.file_type().is_symlink() {
+            local_count += 1;
+            local_size += meta.len();
+            local_mtime = local_mtime.max(file_mtime(&meta));
+        }
+    }
+
+    Ok(ScanFingerprint::merge_with_local(
+        &child_fps,
+        local_count,
+        local_size,
+        local_mtime,
+    ))
 }
 
 fn load_fingerprint(conn: &rusqlite::Connection, dir_id: i64) -> Result<ScanFingerprint> {
