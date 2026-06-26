@@ -9,6 +9,6 @@ fn main() -> Result<()> {
         Commands::Analyze(args) => filetreematch::cli::analyze::run(args, cli.db),
         Commands::List(args) => filetreematch::cli::list::run(args, cli.db),
         Commands::Export(args) => filetreematch::cli::export::run(args, cli.db),
-        Commands::Tui(args) => filetreematch::tui::run(args),
+        Commands::Tui(args) => filetreematch::tui::run(args, cli.db),
     }
 }

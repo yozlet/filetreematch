@@ -1,6 +1,28 @@
 use anyhow::Result;
 use rusqlite::{params, Connection};
 
+pub struct Annotation {
+    pub status: String,
+    pub notes: String,
+}
+
+pub fn get_annotation(conn: &Connection, directory_id: i64) -> Result<Option<Annotation>> {
+    match conn.query_row(
+        "SELECT status, notes FROM annotations WHERE directory_id = ?1",
+        [directory_id],
+        |row| {
+            Ok(Annotation {
+                status: row.get(0)?,
+                notes: row.get(1)?,
+            })
+        },
+    ) {
+        Ok(annotation) => Ok(Some(annotation)),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(err) => Err(err.into()),
+    }
+}
+
 pub fn set_annotation(
     conn: &Connection,
     directory_id: i64,
