@@ -1,6 +1,7 @@
 pub mod directories;
 pub mod files;
 pub mod manifests;
+pub mod query;
 pub mod scans;
 pub mod subset_pairs;
 
@@ -82,5 +83,6 @@ pub fn open_db(db_arg: Option<&Path>) -> Result<Database> {
 pub use directories::*;
 pub use files::*;
 pub use manifests::*;
+pub use query::*;
 pub use scans::*;
 pub use subset_pairs::*;
