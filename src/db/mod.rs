@@ -1,3 +1,6 @@
+pub mod directories;
+pub mod manifests;
+
 use anyhow::{Context, Result};
 use rusqlite::Connection;
 use std::path::Path;
@@ -35,3 +38,6 @@ impl Database {
             .join(format!("{volume_id}.db"))
     }
 }
+
+pub use directories::*;
+pub use manifests::*;
