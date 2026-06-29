@@ -1,7 +1,9 @@
-use crate::db::annotations::{get_annotation, set_annotation};
-use crate::db::query::{is_exact_duplicate, list_pairs, SubsetPairRow};
+use crate::db::annotations::{load_all_annotations, set_annotation, Annotation};
+use crate::db::query::{list_pairs, load_path_index};
 use crate::db::Database;
+use crate::tui::display::{build_rows, selection_detail, SelectionDetail, TuiRow};
 use anyhow::Result;
+use std::collections::HashMap;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Filter {
@@ -29,7 +31,7 @@ impl Filter {
 }
 
 pub struct App {
-    pub pairs: Vec<SubsetPairRow>,
+    pub rows: Vec<TuiRow>,
     pub selected: usize,
     pub filter: Filter,
     pub search: String,
@@ -37,14 +39,17 @@ pub struct App {
     pub note_mode: bool,
     pub note_buffer: String,
     pub status_message: String,
+    pub selection_detail: Option<SelectionDetail>,
     full_detail: bool,
+    path_to_id: HashMap<String, i64>,
+    annotations: HashMap<i64, Annotation>,
     db: Database,
 }
 
 impl App {
     pub fn new(db: Database, full_detail: bool) -> Result<Self> {
         let mut app = Self {
-            pairs: Vec::new(),
+            rows: Vec::new(),
             selected: 0,
             filter: Filter::All,
             search: String::new(),
@@ -52,7 +57,10 @@ impl App {
             note_mode: false,
             note_buffer: String::new(),
             status_message: String::new(),
+            selection_detail: None,
             full_detail,
+            path_to_id: HashMap::new(),
+            annotations: HashMap::new(),
             db,
         };
         app.refresh_pairs()?;
@@ -60,21 +68,23 @@ impl App {
     }
 
     pub fn refresh_pairs(&mut self) -> Result<()> {
+        let conn = self.db.conn();
+        self.path_to_id = load_path_index(conn)?;
+        self.annotations = load_all_annotations(conn)?;
+
         let status_filter = match self.filter {
             Filter::All | Filter::Unreviewed => None,
             Filter::DeleteCandidates => Some("delete_candidate"),
         };
 
-        let mut pairs = list_pairs(self.db.conn(), self.full_detail, status_filter)?;
+        let mut pairs = list_pairs(conn, self.full_detail, status_filter)?;
 
         if self.filter == Filter::Unreviewed {
             pairs.retain(|pair| {
-                match subset_dir_id(self.db.conn(), &pair.subset_path) {
-                    Ok(id) => get_annotation(self.db.conn(), id)
-                        .map(|a| a.is_none())
-                        .unwrap_or(false),
-                    Err(_) => false,
-                }
+                self.path_to_id
+                    .get(&pair.subset_path)
+                    .and_then(|id| self.annotations.get(id))
+                    .is_none()
             });
         }
 
@@ -86,11 +96,29 @@ impl App {
             });
         }
 
-        self.pairs = pairs;
-        if self.selected >= self.pairs.len() {
-            self.selected = self.pairs.len().saturating_sub(1);
+        self.rows = build_rows(&pairs, &self.path_to_id, &self.annotations);
+        if self.selected >= self.rows.len() {
+            self.selected = self.rows.len().saturating_sub(1);
         }
+        self.refresh_selection_detail();
         Ok(())
+    }
+
+    pub fn select_previous(&mut self) {
+        self.selected = self.selected.saturating_sub(1);
+        self.refresh_selection_detail();
+    }
+
+    pub fn select_next(&mut self) {
+        self.selected = (self.selected + 1).min(self.rows.len().saturating_sub(1));
+        self.refresh_selection_detail();
+    }
+
+    fn refresh_selection_detail(&mut self) {
+        self.selection_detail = self
+            .rows
+            .get(self.selected)
+            .map(|row| selection_detail(row, &self.path_to_id, &self.annotations));
     }
 
     pub fn cycle_filter(&mut self) -> Result<()> {
@@ -101,18 +129,31 @@ impl App {
     }
 
     pub fn mark_selected(&mut self, status: &str) -> Result<()> {
-        let Some(pair) = self.pairs.get(self.selected) else {
+        let path = self
+            .rows
+            .get(self.selected)
+            .map(|row| row.subset_path.clone());
+        let Some(path) = path else {
             self.status_message = "No pair selected".to_string();
             return Ok(());
         };
 
-        let dir_id = subset_dir_id(self.db.conn(), &pair.subset_path)?;
-        let notes = get_annotation(self.db.conn(), dir_id)?
-            .map(|a| a.notes)
+        let dir_id = subset_dir_id(&self.path_to_id, &path)?;
+        let notes = self
+            .annotations
+            .get(&dir_id)
+            .map(|a| a.notes.clone())
             .unwrap_or_default();
         set_annotation(self.db.conn(), dir_id, status, &notes)?;
+        self.annotations.insert(
+            dir_id,
+            Annotation {
+                status: status.to_string(),
+                notes,
+            },
+        );
+        self.refresh_pairs()?;
 
-        let path = pair.subset_path.clone();
         self.status_message = format!("Marked {path} as {status}");
         Ok(())
     }
@@ -123,30 +164,37 @@ impl App {
         } else {
             self.note_mode = true;
             self.search_mode = false;
-            self.note_buffer = if let Some(pair) = self.pairs.get(self.selected) {
-                let dir_id = subset_dir_id(self.db.conn(), &pair.subset_path)?;
-                get_annotation(self.db.conn(), dir_id)?
-                    .map(|a| a.notes)
-                    .unwrap_or_default()
-            } else {
-                String::new()
-            };
+            self.note_buffer = self
+                .selection_detail
+                .as_ref()
+                .map(|d| d.notes.clone())
+                .unwrap_or_default();
             self.status_message = "Note mode (Enter save, Esc cancel)".to_string();
         }
         Ok(())
     }
 
     pub fn save_note(&mut self) -> Result<()> {
-        let Some(pair) = self.pairs.get(self.selected) else {
+        let Some(row) = self.rows.get(self.selected) else {
             self.note_mode = false;
             return Ok(());
         };
 
-        let dir_id = subset_dir_id(self.db.conn(), &pair.subset_path)?;
-        let status = get_annotation(self.db.conn(), dir_id)?
-            .map(|a| a.status)
-            .unwrap_or_else(|| "undecided".to_string());
-        set_annotation(self.db.conn(), dir_id, &status, &self.note_buffer)?;
+        let dir_id = subset_dir_id(&self.path_to_id, &row.subset_path)?;
+        let status = self
+            .annotations
+            .get(&dir_id)
+            .map(|a| a.status.as_str())
+            .unwrap_or("undecided");
+        set_annotation(self.db.conn(), dir_id, status, &self.note_buffer)?;
+        self.annotations.insert(
+            dir_id,
+            Annotation {
+                status: status.to_string(),
+                notes: self.note_buffer.clone(),
+            },
+        );
+        self.refresh_selection_detail();
 
         self.note_mode = false;
         self.status_message = "Note saved".to_string();
@@ -179,53 +227,14 @@ impl App {
         Ok(())
     }
 
-    pub fn selected_pair(&self) -> Option<&SubsetPairRow> {
-        self.pairs.get(self.selected)
-    }
-
-    pub fn annotation_for_selected(&self) -> Result<Option<crate::db::annotations::Annotation>> {
-        let Some(pair) = self.selected_pair() else {
-            return Ok(None);
-        };
-        let dir_id = subset_dir_id(self.db.conn(), &pair.subset_path)?;
-        get_annotation(self.db.conn(), dir_id)
-    }
-
-    pub fn is_selected_exact_duplicate(&self) -> bool {
-        let Some(pair) = self.selected_pair() else {
-            return false;
-        };
-
-        match (
-            subset_dir_id(self.db.conn(), &pair.subset_path),
-            subset_dir_id(self.db.conn(), &pair.superset_path),
-        ) {
-            (Ok(subset_id), Ok(superset_id)) => {
-                is_exact_duplicate(self.db.conn(), subset_id, superset_id).unwrap_or(false)
-            }
-            _ => false,
-        }
-    }
-
-    pub fn subset_annotation_marker(&self, subset_path: &str) -> String {
-        match subset_dir_id(self.db.conn(), subset_path) {
-            Ok(id) => match get_annotation(self.db.conn(), id) {
-                Ok(Some(annotation)) => match annotation.status.as_str() {
-                    "keep" => " [K]".to_string(),
-                    "delete_candidate" => " [D]".to_string(),
-                    _ => " [U]".to_string(),
-                },
-                _ => String::new(),
-            },
-            Err(_) => String::new(),
-        }
+    pub fn selected_row(&self) -> Option<&TuiRow> {
+        self.rows.get(self.selected)
     }
 }
 
-fn subset_dir_id(conn: &rusqlite::Connection, path: &str) -> Result<i64> {
-    Ok(conn.query_row(
-        "SELECT id FROM directories WHERE full_path = ?1",
-        [path],
-        |row| row.get(0),
-    )?)
+fn subset_dir_id(path_to_id: &HashMap<String, i64>, path: &str) -> Result<i64> {
+    path_to_id
+        .get(path)
+        .copied()
+        .ok_or_else(|| anyhow::anyhow!("directory not found: {path}"))
 }

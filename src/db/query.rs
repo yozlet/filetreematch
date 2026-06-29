@@ -1,5 +1,6 @@
 use anyhow::Result;
 use rusqlite::Connection;
+use std::collections::HashMap;
 
 pub struct SubsetPairRow {
     pub subset_path: String,
@@ -7,6 +8,7 @@ pub struct SubsetPairRow {
     pub file_count: i64,
     pub total_size: i64,
     pub is_maximal: bool,
+    pub is_exact_duplicate: bool,
 }
 
 pub fn list_pairs(
@@ -48,6 +50,7 @@ pub fn list_pairs(
             file_count: row.get(2)?,
             total_size: row.get(3)?,
             is_maximal: row.get::<_, i64>(4)? != 0,
+            is_exact_duplicate: false,
         })
     };
 
@@ -57,7 +60,29 @@ pub fn list_pairs(
         stmt.query_map([], map_row)?
     };
 
-    rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    let mut pairs: Vec<SubsetPairRow> = rows.collect::<Result<_, _>>()?;
+    dedupe_exact_duplicate_pairs(&mut pairs);
+    Ok(pairs)
+}
+
+fn dedupe_exact_duplicate_pairs(pairs: &mut Vec<SubsetPairRow>) {
+    use std::collections::HashSet;
+
+    let reverse_exists: HashSet<(String, String)> = pairs
+        .iter()
+        .map(|p| (p.superset_path.clone(), p.subset_path.clone()))
+        .collect();
+
+    for pair in pairs.iter_mut() {
+        pair.is_exact_duplicate = reverse_exists.contains(&(pair.subset_path.clone(), pair.superset_path.clone()));
+    }
+
+    pairs.retain(|pair| {
+        if pair.is_exact_duplicate && pair.subset_path > pair.superset_path {
+            return false;
+        }
+        true
+    });
 }
 
 pub fn is_exact_duplicate(
@@ -74,4 +99,11 @@ pub fn is_exact_duplicate(
         |row| row.get(0),
     )?;
     Ok(exists)
+}
+
+pub fn load_path_index(conn: &Connection) -> Result<HashMap<String, i64>> {
+    let mut stmt = conn.prepare("SELECT full_path, id FROM directories WHERE deleted = 0")?;
+    let rows = stmt.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get(1)?)))?;
+    rows.collect::<Result<HashMap<_, _>, _>>()
+        .map_err(Into::into)
 }

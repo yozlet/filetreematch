@@ -1,4 +1,5 @@
 mod app;
+pub mod display;
 mod ui;
 
 use crate::cli::TuiArgs;
@@ -36,42 +37,57 @@ fn run_loop(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     app: &mut app::App,
 ) -> Result<()> {
+    let mut needs_redraw = true;
+
     loop {
-        terminal.draw(|frame| ui::render(frame, app))?;
+        if needs_redraw {
+            terminal.draw(|frame| ui::render(frame, app))?;
+            needs_redraw = false;
+        }
 
-        if event::poll(Duration::from_millis(100))? {
-            if let Event::Key(key) = event::read()? {
-                if key.kind != KeyEventKind::Press {
-                    continue;
-                }
+        let timeout = if app.note_mode {
+            Duration::from_millis(250)
+        } else {
+            Duration::from_millis(1000)
+        };
 
-                if app.note_mode {
-                    handle_note_key(app, key.code, key.modifiers)?;
-                    continue;
-                }
-
-                if app.search_mode {
-                    handle_search_key(app, key.code)?;
-                    continue;
-                }
-
-                match key.code {
-                    KeyCode::Char('q') => break,
-                    KeyCode::Char('k') => app.mark_selected("keep")?,
-                    KeyCode::Char('d') => app.mark_selected("delete_candidate")?,
-                    KeyCode::Char('u') => app.mark_selected("undecided")?,
-                    KeyCode::Char('n') => app.toggle_note_mode()?,
-                    KeyCode::Char('f') => app.cycle_filter()?,
-                    KeyCode::Char('/') => app.start_search(),
-                    KeyCode::Up => {
-                        app.selected = app.selected.saturating_sub(1);
-                    }
-                    KeyCode::Down => {
-                        app.selected = (app.selected + 1).min(app.pairs.len().saturating_sub(1));
-                    }
-                    _ => {}
-                }
+        if !event::poll(timeout)? {
+            if app.note_mode {
+                needs_redraw = true;
             }
+            continue;
+        }
+
+        if let Event::Key(key) = event::read()? {
+            if key.kind != KeyEventKind::Press {
+                continue;
+            }
+
+            if app.note_mode {
+                handle_note_key(app, key.code, key.modifiers)?;
+                needs_redraw = true;
+                continue;
+            }
+
+            if app.search_mode {
+                handle_search_key(app, key.code)?;
+                needs_redraw = true;
+                continue;
+            }
+
+            match key.code {
+                KeyCode::Char('q') => break,
+                KeyCode::Char('k') => app.mark_selected("keep")?,
+                KeyCode::Char('d') => app.mark_selected("delete_candidate")?,
+                KeyCode::Char('u') => app.mark_selected("undecided")?,
+                KeyCode::Char('n') => app.toggle_note_mode()?,
+                KeyCode::Char('f') => app.cycle_filter()?,
+                KeyCode::Char('/') => app.start_search(),
+                KeyCode::Up => app.select_previous(),
+                KeyCode::Down => app.select_next(),
+                _ => continue,
+            }
+            needs_redraw = true;
         }
     }
     Ok(())

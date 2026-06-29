@@ -1,5 +1,6 @@
 use anyhow::Result;
 use rusqlite::{params, Connection};
+use std::collections::HashMap;
 
 pub struct Annotation {
     pub status: String,
@@ -37,6 +38,25 @@ pub fn set_annotation(
         params![directory_id, status, notes],
     )?;
     Ok(())
+}
+
+pub fn load_all_annotations(conn: &Connection) -> Result<HashMap<i64, Annotation>> {
+    let mut stmt = conn.prepare("SELECT directory_id, status, notes FROM annotations")?;
+    let rows = stmt.query_map([], |row| {
+        Ok((
+            row.get::<_, i64>(0)?,
+            Annotation {
+                status: row.get(1)?,
+                notes: row.get(2)?,
+            },
+        ))
+    })?;
+    let mut annotations = HashMap::new();
+    for row in rows {
+        let (id, annotation) = row?;
+        annotations.insert(id, annotation);
+    }
+    Ok(annotations)
 }
 
 pub fn delete_candidate_paths(conn: &Connection) -> Result<Vec<String>> {

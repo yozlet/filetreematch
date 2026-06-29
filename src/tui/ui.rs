@@ -34,7 +34,7 @@ fn render_list(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
         .title(format!(" Subset Pairs [{filter_label}] "))
         .borders(Borders::ALL);
 
-    if app.pairs.is_empty() {
+    if app.rows.is_empty() {
         let empty = Paragraph::new("No pairs match current filter/search")
             .block(block)
             .wrap(Wrap { trim: true });
@@ -43,24 +43,23 @@ fn render_list(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
     }
 
     let items: Vec<ListItem> = app
-        .pairs
+        .rows
         .iter()
         .enumerate()
-        .map(|(idx, pair)| {
-            let marker = app.subset_annotation_marker(&pair.subset_path);
-            let size = format_size(pair.total_size);
+        .map(|(idx, row)| {
+            let size = format_size(row.total_size);
             let prefix = if idx == app.selected { "▶ " } else { "  " };
             let line = Line::from(vec![
                 Span::raw(prefix),
                 Span::styled(
-                    format!("{} ", pair.subset_path),
+                    format!("{} ", row.subset_path),
                     if idx == app.selected {
                         Style::default().add_modifier(Modifier::BOLD)
                     } else {
                         Style::default()
                     },
                 ),
-                Span::styled(marker, Style::default().fg(Color::Yellow)),
+                Span::styled(row.annotation_marker.clone(), Style::default().fg(Color::Yellow)),
                 Span::raw(format!("  {size}")),
             ]);
             ListItem::new(line).into()
@@ -80,31 +79,24 @@ fn render_list(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
 fn render_detail(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
     let block = Block::default().title(" Detail ").borders(Borders::ALL);
 
-    let content = if let Some(pair) = app.selected_pair() {
-        let (status, notes) = app
-            .annotation_for_selected()
-            .ok()
-            .flatten()
-            .map(|a| (a.status, a.notes))
-            .unwrap_or_else(|| ("unreviewed".to_string(), String::new()));
-
+    let content = if let (Some(row), Some(detail)) = (app.selected_row(), app.selection_detail.as_ref()) {
         let mut lines = vec![
             Line::from(vec![
                 Span::styled("Subset:  ", Style::default().add_modifier(Modifier::BOLD)),
-                Span::raw(pair.subset_path.clone()),
+                Span::raw(row.subset_path.clone()),
             ]),
             Line::from(vec![
                 Span::styled("Superset:", Style::default().add_modifier(Modifier::BOLD)),
-                Span::raw(format!(" {}", pair.superset_path)),
+                Span::raw(format!(" {}", row.superset_path)),
             ]),
             Line::from(format!(
                 "Files: {}  |  Size: {}",
-                pair.file_count,
-                format_size(pair.total_size)
+                row.file_count,
+                format_size(row.total_size)
             )),
         ];
 
-        if app.is_selected_exact_duplicate() {
+        if detail.is_exact_duplicate {
             lines.push(Line::from(vec![Span::styled(
                 "[exact duplicate]",
                 Style::default()
@@ -117,14 +109,14 @@ fn render_detail(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
             Line::from(""),
             Line::from(vec![
                 Span::styled("Status: ", Style::default().add_modifier(Modifier::BOLD)),
-                Span::raw(status.clone()),
+                Span::raw(detail.status.clone()),
             ]),
         ]);
 
-        if !notes.is_empty() {
+        if !detail.notes.is_empty() {
             lines.push(Line::from(vec![
                 Span::styled("Notes:  ", Style::default().add_modifier(Modifier::BOLD)),
-                Span::raw(notes),
+                Span::raw(detail.notes.clone()),
             ]));
         }
 
@@ -157,7 +149,7 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) 
         parts.push(format!("Filter: \"{}\"", app.search));
     }
 
-    parts.push(format!("{} pairs", app.pairs.len()));
+    parts.push(format!("{} pairs", app.rows.len()));
 
     let text = parts.join("  |  ");
     let paragraph = Paragraph::new(text).block(Block::default().borders(Borders::ALL));

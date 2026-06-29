@@ -112,10 +112,15 @@ fn scanned_top_level_folder_subset_of_sibling_with_extra_files() {
         root.join("old-pc").to_string_lossy().into_owned(),
         root.join("master").to_string_lossy().into_owned(),
     )));
-    assert!(pairs.contains(&(
-        root.join("old-pc/photos").to_string_lossy().into_owned(),
-        root.join("master/photos").to_string_lossy().into_owned(),
-    )));
+    let photo_pairs: Vec<_> = pairs
+        .iter()
+        .filter(|(subset, _)| subset.contains("photos"))
+        .collect();
+    assert_eq!(
+        photo_pairs.len(),
+        1,
+        "identical photo folders should list one canonical pair"
+    );
 }
 
 #[test]
@@ -147,7 +152,7 @@ fn same_paths_different_sizes_are_not_subsets() {
 }
 
 #[test]
-fn identical_manifests_produce_bidirectional_pairs() {
+fn identical_manifests_show_single_canonical_pair() {
     let (_tmp, db) = common::open_temp_db();
     let conn = db.conn();
     insert_dir(conn, 1, "copy-a", "/vol/copy-a", None, 2, 30);
@@ -159,8 +164,9 @@ fn identical_manifests_produce_bidirectional_pairs() {
 
     run_analyze(&db, false).unwrap();
     let pairs = pair_paths(&db, true);
-    assert!(pairs.contains(&("/vol/copy-a".to_string(), "/vol/copy-b".to_string())));
-    assert!(pairs.contains(&("/vol/copy-b".to_string(), "/vol/copy-a".to_string())));
+    assert_eq!(pairs.len(), 1);
+    assert!(pairs.contains(&("/vol/copy-a".to_string(), "/vol/copy-b".to_string()))
+        || pairs.contains(&("/vol/copy-b".to_string(), "/vol/copy-a".to_string())));
 }
 
 #[test]
@@ -240,10 +246,12 @@ fn reanalyze_replaces_stale_pairs() {
     .unwrap();
 
     run_analyze(&db, false).unwrap();
-    let pairs = pair_paths(&db, true);
-    assert_eq!(pairs.len(), 2);
-    assert!(pairs.contains(&("/vol/a".into(), "/vol/b".into())));
-    assert!(pairs.contains(&("/vol/b".into(), "/vol/a".into())));
+    let pairs = list_pairs(db.conn(), true, None).unwrap();
+    assert_eq!(pairs.len(), 1);
+    assert!(pairs[0].is_exact_duplicate);
+    assert!(
+        pairs[0].subset_path == "/vol/a" || pairs[0].subset_path == "/vol/b"
+    );
 }
 
 #[test]
