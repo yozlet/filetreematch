@@ -1,7 +1,5 @@
 mod common;
 
-use filetreematch::db::Database;
-
 #[test]
 fn initializes_all_tables() {
     let (_tmp, db) = common::open_temp_db();
@@ -22,4 +20,20 @@ fn initializes_all_tables() {
     assert!(tables.contains(&"scan_errors".to_string()));
     assert!(tables.contains(&"scans".to_string()));
     assert!(tables.contains(&"subset_pairs".to_string()));
+}
+
+#[test]
+fn creates_index_for_maximal_pairs_by_size() {
+    let (_tmp, db) = common::open_temp_db();
+    let indexes: Vec<String> = db
+        .conn()
+        .prepare(
+            "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='subset_pairs'",
+        )
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .map(|r| r.unwrap())
+        .collect();
+    assert!(indexes.contains(&"idx_subset_pairs_maximal_size".to_string()));
 }

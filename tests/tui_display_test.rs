@@ -1,6 +1,6 @@
 use filetreematch::db::annotations::Annotation;
 use filetreematch::db::query::SubsetPairRow;
-use filetreematch::tui::display::build_rows;
+use filetreematch::tui::display::{build_rows, render_slice_bounds, window_offset_for_selection};
 use std::collections::HashMap;
 
 fn sample_pair(subset: &str, superset: &str, exact: bool) -> SubsetPairRow {
@@ -50,4 +50,18 @@ fn build_rows_carries_exact_duplicate_flag() {
     let pairs = vec![sample_pair("/vol/a", "/vol/b", true)];
     let rows = build_rows(&pairs, &HashMap::new(), &HashMap::new());
     assert!(rows[0].is_exact_duplicate);
+}
+
+#[test]
+fn window_offset_keeps_selection_centered_in_page() {
+    assert_eq!(window_offset_for_selection(0, 1000, 500), 0);
+    assert_eq!(window_offset_for_selection(400, 1000, 500), 150);
+    assert_eq!(window_offset_for_selection(999, 1000, 500), 500);
+}
+
+#[test]
+fn render_slice_bounds_limits_items_to_viewport() {
+    let (start, count) = render_slice_bounds(405, 150, 500, 20);
+    assert_eq!(start, 245);
+    assert_eq!(count, 20);
 }

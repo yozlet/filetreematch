@@ -52,6 +52,9 @@ CREATE TABLE IF NOT EXISTS subset_pairs (
     UNIQUE(subset_dir_id, superset_dir_id)
 );
 
+CREATE INDEX IF NOT EXISTS idx_subset_pairs_maximal_size
+    ON subset_pairs(is_maximal, total_size DESC);
+
 CREATE TABLE IF NOT EXISTS scan_errors (
     id              INTEGER PRIMARY KEY,
     scan_id         INTEGER NOT NULL REFERENCES scans(id),

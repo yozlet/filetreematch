@@ -83,8 +83,8 @@ fn run_loop(
                 KeyCode::Char('n') => app.toggle_note_mode()?,
                 KeyCode::Char('f') => app.cycle_filter()?,
                 KeyCode::Char('/') => app.start_search(),
-                KeyCode::Up => app.select_previous(),
-                KeyCode::Down => app.select_next(),
+                KeyCode::Up => app.select_previous()?,
+                KeyCode::Down => app.select_next()?,
                 _ => continue,
             }
             needs_redraw = true;
@@ -120,11 +120,9 @@ fn handle_search_key(app: &mut app::App, code: KeyCode) -> Result<()> {
         KeyCode::Esc => app.clear_search()?,
         KeyCode::Backspace => {
             app.search.pop();
-            app.refresh_pairs()?;
         }
         KeyCode::Char(c) => {
             app.search.push(c);
-            app.refresh_pairs()?;
         }
         _ => {}
     }

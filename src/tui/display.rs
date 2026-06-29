@@ -53,6 +53,31 @@ pub fn selection_detail(
     }
 }
 
+pub fn window_offset_for_selection(selected: usize, total: usize, page_size: usize) -> usize {
+    if total <= page_size {
+        return 0;
+    }
+    let half = page_size / 2;
+    selected.saturating_sub(half).min(total.saturating_sub(page_size))
+}
+
+pub fn render_slice_bounds(
+    selected_global: usize,
+    window_offset: usize,
+    loaded_count: usize,
+    viewport_height: usize,
+) -> (usize, usize) {
+    if loaded_count == 0 || viewport_height == 0 {
+        return (0, 0);
+    }
+    let local_selected = selected_global.saturating_sub(window_offset);
+    let visible = viewport_height.min(loaded_count);
+    let start = local_selected
+        .saturating_sub(visible / 2)
+        .min(loaded_count.saturating_sub(visible));
+    (start, visible)
+}
+
 fn annotation_marker(
     path_to_id: &HashMap<String, i64>,
     annotations: &HashMap<i64, Annotation>,

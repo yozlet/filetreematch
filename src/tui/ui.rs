@@ -1,4 +1,5 @@
 use crate::tui::app::App;
+use crate::tui::display::render_slice_bounds;
 use ratatui::{
     layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
@@ -42,18 +43,30 @@ fn render_list(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
         return;
     }
 
-    let items: Vec<ListItem> = app
-        .rows
+    let viewport_height = area.height.saturating_sub(2) as usize;
+    let (start, count) = render_slice_bounds(
+        app.selected,
+        app.window_offset,
+        app.rows.len(),
+        viewport_height,
+    );
+
+    let items: Vec<ListItem> = app.rows[start..start + count]
         .iter()
         .enumerate()
-        .map(|(idx, row)| {
+        .map(|(i, row)| {
+            let global_idx = app.window_offset + start + i;
             let size = format_size(row.total_size);
-            let prefix = if idx == app.selected { "▶ " } else { "  " };
+            let prefix = if global_idx == app.selected {
+                "▶ "
+            } else {
+                "  "
+            };
             let line = Line::from(vec![
                 Span::raw(prefix),
                 Span::styled(
                     format!("{} ", row.subset_path),
-                    if idx == app.selected {
+                    if global_idx == app.selected {
                         Style::default().add_modifier(Modifier::BOLD)
                     } else {
                         Style::default()
@@ -67,7 +80,13 @@ fn render_list(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
         .collect();
 
     let mut state = ListState::default();
-    state.select(Some(app.selected));
+    let local_selected = app.selected.saturating_sub(app.window_offset);
+    let list_selected = if local_selected >= start && local_selected < start + count {
+        local_selected - start
+    } else {
+        0
+    };
+    state.select(Some(list_selected));
 
     let list = List::new(items)
         .block(block)
@@ -149,7 +168,16 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) 
         parts.push(format!("Filter: \"{}\"", app.search));
     }
 
-    parts.push(format!("{} pairs", app.rows.len()));
+    let showing_end = (app.window_offset + app.rows.len()).min(app.total_pairs);
+    let showing_start = if app.total_pairs == 0 {
+        0
+    } else {
+        app.window_offset + 1
+    };
+    parts.push(format!(
+        "{} pairs ({}-{})",
+        app.total_pairs, showing_start, showing_end
+    ));
 
     let text = parts.join("  |  ");
     let paragraph = Paragraph::new(text).block(Block::default().borders(Borders::ALL));

@@ -1,9 +1,13 @@
 use crate::db::annotations::{load_all_annotations, set_annotation, Annotation};
-use crate::db::query::{list_pairs, load_path_index};
+use crate::db::query::{count_pairs, list_pairs_query, load_path_index, ListPairsQuery};
 use crate::db::Database;
-use crate::tui::display::{build_rows, selection_detail, SelectionDetail, TuiRow};
+use crate::tui::display::{
+    build_rows, selection_detail, window_offset_for_selection, SelectionDetail, TuiRow,
+};
 use anyhow::Result;
 use std::collections::HashMap;
+
+const PAGE_SIZE: usize = 500;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Filter {
@@ -33,6 +37,8 @@ impl Filter {
 pub struct App {
     pub rows: Vec<TuiRow>,
     pub selected: usize,
+    pub total_pairs: usize,
+    pub window_offset: usize,
     pub filter: Filter,
     pub search: String,
     pub search_mode: bool,
@@ -48,9 +54,12 @@ pub struct App {
 
 impl App {
     pub fn new(db: Database, full_detail: bool) -> Result<Self> {
+        let path_to_id = load_path_index(db.conn())?;
         let mut app = Self {
             rows: Vec::new(),
             selected: 0,
+            total_pairs: 0,
+            window_offset: 0,
             filter: Filter::All,
             search: String::new(),
             search_mode: false,
@@ -59,7 +68,7 @@ impl App {
             status_message: String::new(),
             selection_detail: None,
             full_detail,
-            path_to_id: HashMap::new(),
+            path_to_id,
             annotations: HashMap::new(),
             db,
         };
@@ -67,62 +76,106 @@ impl App {
         Ok(app)
     }
 
-    pub fn refresh_pairs(&mut self) -> Result<()> {
-        let conn = self.db.conn();
-        self.path_to_id = load_path_index(conn)?;
-        self.annotations = load_all_annotations(conn)?;
-
+    fn pair_query(&self) -> ListPairsQuery<'_> {
         let status_filter = match self.filter {
             Filter::All | Filter::Unreviewed => None,
             Filter::DeleteCandidates => Some("delete_candidate"),
         };
-
-        let mut pairs = list_pairs(conn, self.full_detail, status_filter)?;
-
-        if self.filter == Filter::Unreviewed {
-            pairs.retain(|pair| {
-                self.path_to_id
-                    .get(&pair.subset_path)
-                    .and_then(|id| self.annotations.get(id))
-                    .is_none()
-            });
+        ListPairsQuery {
+            full_detail: self.full_detail,
+            status_filter,
+            unreviewed_only: self.filter == Filter::Unreviewed,
+            search: if self.search.is_empty() {
+                None
+            } else {
+                Some(self.search.as_str())
+            },
+            limit: Some(PAGE_SIZE),
+            offset: Some(self.window_offset),
         }
+    }
 
-        if !self.search.is_empty() {
-            let query = self.search.to_lowercase();
-            pairs.retain(|pair| {
-                pair.subset_path.to_lowercase().contains(&query)
-                    || pair.superset_path.to_lowercase().contains(&query)
-            });
-        }
+    pub fn refresh_pairs(&mut self) -> Result<()> {
+        let conn = self.db.conn();
+        self.annotations = load_all_annotations(conn)?;
 
+        let count_query = ListPairsQuery {
+            limit: None,
+            offset: None,
+            ..self.pair_query()
+        };
+        self.total_pairs = count_pairs(conn, &count_query)?;
+        self.window_offset =
+            window_offset_for_selection(self.selected, self.total_pairs, PAGE_SIZE);
+
+        let pairs = list_pairs_query(
+            conn,
+            &ListPairsQuery {
+                offset: Some(self.window_offset),
+                ..self.pair_query()
+            },
+        )?;
         self.rows = build_rows(&pairs, &self.path_to_id, &self.annotations);
-        if self.selected >= self.rows.len() {
-            self.selected = self.rows.len().saturating_sub(1);
+
+        if self.selected >= self.total_pairs {
+            self.selected = self.total_pairs.saturating_sub(1);
         }
         self.refresh_selection_detail();
         Ok(())
     }
 
-    pub fn select_previous(&mut self) {
-        self.selected = self.selected.saturating_sub(1);
+    fn reload_window(&mut self) -> Result<()> {
+        self.window_offset =
+            window_offset_for_selection(self.selected, self.total_pairs, PAGE_SIZE);
+        let pairs = list_pairs_query(
+            self.db.conn(),
+            &ListPairsQuery {
+                offset: Some(self.window_offset),
+                ..self.pair_query()
+            },
+        )?;
+        self.rows = build_rows(&pairs, &self.path_to_id, &self.annotations);
         self.refresh_selection_detail();
+        Ok(())
     }
 
-    pub fn select_next(&mut self) {
-        self.selected = (self.selected + 1).min(self.rows.len().saturating_sub(1));
-        self.refresh_selection_detail();
+    fn ensure_selection_visible(&mut self) -> Result<()> {
+        let window_end = self.window_offset + self.rows.len();
+        if self.selected < self.window_offset || self.selected >= window_end {
+            self.reload_window()?;
+        } else {
+            self.refresh_selection_detail();
+        }
+        Ok(())
+    }
+
+    pub fn select_previous(&mut self) -> Result<()> {
+        if self.selected > 0 {
+            self.selected -= 1;
+            self.ensure_selection_visible()?;
+        }
+        Ok(())
+    }
+
+    pub fn select_next(&mut self) -> Result<()> {
+        if self.selected + 1 < self.total_pairs {
+            self.selected += 1;
+            self.ensure_selection_visible()?;
+        }
+        Ok(())
     }
 
     fn refresh_selection_detail(&mut self) {
+        let local = self.selected.saturating_sub(self.window_offset);
         self.selection_detail = self
             .rows
-            .get(self.selected)
+            .get(local)
             .map(|row| selection_detail(row, &self.path_to_id, &self.annotations));
     }
 
     pub fn cycle_filter(&mut self) -> Result<()> {
         self.filter = self.filter.next();
+        self.selected = 0;
         self.refresh_pairs()?;
         self.status_message = format!("Filter: {}", self.filter.label());
         Ok(())
@@ -131,7 +184,7 @@ impl App {
     pub fn mark_selected(&mut self, status: &str) -> Result<()> {
         let path = self
             .rows
-            .get(self.selected)
+            .get(self.selected.saturating_sub(self.window_offset))
             .map(|row| row.subset_path.clone());
         let Some(path) = path else {
             self.status_message = "No pair selected".to_string();
@@ -175,7 +228,8 @@ impl App {
     }
 
     pub fn save_note(&mut self) -> Result<()> {
-        let Some(row) = self.rows.get(self.selected) else {
+        let local = self.selected.saturating_sub(self.window_offset);
+        let Some(row) = self.rows.get(local) else {
             self.note_mode = false;
             return Ok(());
         };
@@ -215,6 +269,7 @@ impl App {
 
     pub fn apply_search(&mut self) -> Result<()> {
         self.search_mode = false;
+        self.selected = 0;
         self.refresh_pairs()?;
         Ok(())
     }
@@ -222,13 +277,15 @@ impl App {
     pub fn clear_search(&mut self) -> Result<()> {
         self.search = String::new();
         self.search_mode = false;
+        self.selected = 0;
         self.refresh_pairs()?;
         self.status_message = "Search cleared".to_string();
         Ok(())
     }
 
     pub fn selected_row(&self) -> Option<&TuiRow> {
-        self.rows.get(self.selected)
+        self.rows
+            .get(self.selected.saturating_sub(self.window_offset))
     }
 }
 
