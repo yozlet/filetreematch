@@ -6,8 +6,10 @@ use crate::db::scans::log_scan_error;
 use crate::db::Database;
 use crate::scan::fingerprint::{hash_fingerprint, ScanFingerprint};
 use anyhow::Result;
+use indicatif::{ProgressBar, ProgressStyle};
 use std::fs;
 use std::path::Path;
+use std::time::Duration;
 
 struct LocalFile {
     name: String,
@@ -15,17 +17,85 @@ struct LocalFile {
     mtime: i64,
 }
 
+struct ScanProgress {
+    bar: ProgressBar,
+    top_level_total: usize,
+    top_level_done: usize,
+}
+
+impl ScanProgress {
+    fn new(top_level_total: usize) -> Self {
+        let bar = ProgressBar::new_spinner();
+        bar.set_style(
+            ProgressStyle::default_spinner()
+                .template("{spinner:.green} [{elapsed_precise}] {pos} dirs | {msg}")
+                .unwrap(),
+        );
+        bar.enable_steady_tick(Duration::from_millis(100));
+        Self {
+            bar,
+            top_level_total,
+            top_level_done: 0,
+        }
+    }
+
+    fn tick_directory(&self, display_path: &str) {
+        self.bar.inc(1);
+        self.set_message(display_path);
+    }
+
+    fn finish_top_level(&mut self, name: &str) {
+        self.top_level_done += 1;
+        self.set_message(name);
+    }
+
+    fn set_message(&self, display_path: &str) {
+        let msg = if self.top_level_total > 0 {
+            let pct = self.top_level_done * 100 / self.top_level_total;
+            format!(
+                "{}/{} top-level ({pct}%) · {display_path}",
+                self.top_level_done, self.top_level_total
+            )
+        } else {
+            display_path.to_string()
+        };
+        self.bar.set_message(msg);
+    }
+
+    fn finish(mut self) -> (u64, usize, usize) {
+        if self.top_level_done < self.top_level_total {
+            self.top_level_done = self.top_level_total;
+        }
+        let dir_count = self.bar.position();
+        let (done, total) = (self.top_level_done, self.top_level_total);
+        self.bar.finish_and_clear();
+        (dir_count, done, total)
+    }
+}
+
 pub fn run_scan(root: &Path, db: &Database, ignore: &IgnoreRules, scan_id: i64) -> Result<()> {
-    scan_directory(root, None, db, ignore, scan_id)?;
+    let top_level_total = count_top_level_dirs(root, ignore)?;
+    let mut progress = ScanProgress::new(top_level_total);
+
+    scan_directory(root, root, None, db, ignore, scan_id, &mut progress)?;
+
+    let (dir_count, top_done, top_total) = progress.finish();
+    if top_total > 0 {
+        println!("Scanned {dir_count} directories ({top_done}/{top_total} top-level folders)");
+    } else {
+        println!("Scanned {dir_count} directories");
+    }
     Ok(())
 }
 
 fn scan_directory(
     path: &Path,
+    root: &Path,
     parent_id: Option<i64>,
     db: &Database,
     ignore: &IgnoreRules,
     scan_id: i64,
+    progress: &mut ScanProgress,
 ) -> Result<i64> {
     if ignore.should_ignore(path) {
         return Ok(0);
@@ -36,6 +106,12 @@ fn scan_directory(
         .and_then(|s| s.to_str())
         .unwrap_or("");
     let full_path = path.to_string_lossy().to_string();
+    let display_path = path
+        .strip_prefix(root)
+        .unwrap_or(path)
+        .to_string_lossy()
+        .into_owned();
+    progress.tick_directory(&display_path);
     let conn = db.conn();
 
     if let Some(existing_id) = get_directory_id(conn, &full_path)? {
@@ -97,8 +173,16 @@ fn scan_directory(
 
     let mut child_ids = Vec::new();
     let mut child_fps = Vec::new();
+    let at_root = path == root;
     for subdir in subdirs {
-        let child_id = scan_directory(&subdir, None, db, ignore, scan_id)?;
+        let child_id = scan_directory(&subdir, root, None, db, ignore, scan_id, progress)?;
+        if at_root {
+            let top_name = subdir
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("");
+            progress.finish_top_level(top_name);
+        }
         if child_id > 0 {
             child_ids.push(child_id);
             child_fps.push(load_fingerprint(conn, child_id)?);
@@ -224,4 +308,23 @@ fn file_mtime(meta: &std::fs::Metadata) -> i64 {
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0)
+}
+
+fn count_top_level_dirs(root: &Path, ignore: &IgnoreRules) -> Result<usize> {
+    let entries = match fs::read_dir(root) {
+        Ok(entries) => entries,
+        Err(_) => return Ok(0),
+    };
+
+    let mut count = 0;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if ignore.should_ignore(&path) {
+            continue;
+        }
+        if entry.metadata().map(|m| m.is_dir()).unwrap_or(false) {
+            count += 1;
+        }
+    }
+    Ok(count)
 }
