@@ -183,7 +183,7 @@ impl ManifestIndex {
         self.dirs.len()
     }
 
-    pub fn meta_for(&self, dir_id: i64) -> Option<DirMeta> {
+    pub(crate) fn meta_for(&self, dir_id: i64) -> Option<DirMeta> {
         self.meta_by_id.get(&dir_id).copied()
     }
 
